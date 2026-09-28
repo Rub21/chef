@@ -62,19 +62,14 @@ execute "create-lines-directional" do
   creates "/srv/gps-tile.openstreetmap.org/shapes/lines-directional.dm/meta"
 end
 
-# Updater that fetches traces from our own openstreetmap-website instance.
-# Kept outside updater/ so the git sync in gps-tile does not touch it.
-template "/srv/gps-tile.openstreetmap.org/update" do
-  source "update.erb"
-  owner "gpstile"
-  group "gpstile"
-  mode "755"
-  variables :site_url => node[:gps_tile_dev][:site_url],
-            :min_trace => node[:gps_tile_dev][:min_trace]
-  notifies :restart, "service[gps-update]"
+# Use our fork of gpx-updater, which reads the site and lowest trace id
+# from the environment instead of having them hardcoded.
+edit_resource(:git, "/srv/gps-tile.openstreetmap.org/updater") do
+  repository node[:gps_tile_dev][:updater_repo]
+  revision node[:gps_tile_dev][:updater_revision]
 end
 
-# Point the gps-update unit defined in gps-tile at our script
 edit_resource(:systemd_service, "gps-update") do
-  exec_start "/srv/gps-tile.openstreetmap.org/update"
+  environment "GPX_SITE" => node[:gps_tile_dev][:site_url],
+              "GPX_MIN_TRACE" => node[:gps_tile_dev][:min_trace].to_s
 end
