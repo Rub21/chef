@@ -1,0 +1,15 @@
+// DO NOT EDIT - This file is being maintained by Chef
+
+$(document).ready(function () {
+  // Create a map
+  var map = L.map("map");
+
+  // Add GPS tile layer served by this host
+  L.tileLayer("//<%= @domain %>/lines/{z}/{x}/{y}.png", {
+    attribution: "© <a target=\"_parent\" href=\"https://www.openstreetmap.org\">OpenStreetMap</a> and contributors, under an <a target=\"_parent\" href=\"https://www.openstreetmap.org/copyright\">open license</a>",
+    maxZoom: 18
+  }).addTo(map);
+
+  // Show the whole world
+  map.fitWorld();
+});
