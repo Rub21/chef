@@ -1,0 +1,164 @@
+#!/usr/bin/perl -w
+# DO NOT EDIT - This file is being maintained by Chef
+#
+# Copy of gpx-updater/update that fetches traces from our own
+# openstreetmap-website instance instead of www.openstreetmap.org.
+
+use Cache::Memcached;
+
+our $memd = new Cache::Memcached {
+        'servers' => [ "localhost:11211" ],
+};
+
+use strict;
+
+our $site = "<%= @site_url %>";
+our $min_trace = <%= @min_trace %>;
+
+open(OUT, ">>$ENV{'HOME'}/time-stats");
+printf OUT ("Starting $$ at %d\n", time());
+close(OUT);
+
+mkdir "tracks";
+mkdir "tracks/pending";
+mkdir "tracks/current";
+
+our $encodeopts = "-z20 -m8";
+
+unless (-d "shapes/current") {
+	open(OUT, "| ./datamaps/encode $encodeopts -o shapes/current");
+	close(OUT);
+}
+
+sub merge {
+	my ($pending, $current) = @_;
+	my $now = time();
+
+	system "./datamaps/merge -u -o $current-$now $current $pending";
+	if (($? >> 8) == 0) {
+		rename($current, "$current-old-$now");
+		# XXX momentary race
+		rename("$current-$now", $current);
+
+		my $f;
+		for $f (<$pending/*>) {
+			unlink $f;
+		}
+		rmdir $pending;
+
+		for $f (<$current-old-$now/*>) {
+			unlink $f;
+		}
+		rmdir "$current-old-$now";
+	} else {
+		print STDERR "error $?\n";
+	}
+}
+
+while (1) {
+	my $max = 0;
+	my $min = 0;
+	my $now = time();
+	my $did = 0;
+
+	open(IN, "curl -q -L -m 120 $site/traces/rss |");
+	while (<IN>) {
+		if (/<link>$site\/user\/(.*)\/traces\/([0-9]+)<\/link>/) {
+			my $track = $2;
+
+			if ($track > $max) {
+				$max = $track + 0;
+			}
+		}
+	}
+	close(IN);
+
+	my $rsstime = time();
+
+	for (my $i = $max; $i > $min_trace; $i--) {
+		last if time() >= $now + 600;
+
+		my $dir = int($i / 10000);
+		next if -f "tracks/pending/$i.gpx";
+		next if -f "tracks/current/$dir/$i.gpx.gz";
+
+		print "$i\n";
+		$min = $i;
+
+		open (IN, "curl -q -L -m 120 --compressed $site/trace/$i/data |");
+		open(OUT, ">tracks/pending/$i.gpx");
+		while (<IN>) {
+			print OUT;
+		}
+		close(OUT);
+		close(IN);
+
+		$did = 1;
+	}
+
+	my $retrievetime = time();
+	my ($parsetime, $cachetime, $mergetime, $cleantime);
+
+	my @pending = <tracks/pending/*.gpx>;
+	if ($#pending >= 0) {
+		$did = 1;
+
+		open(OUT, "| ./datamaps/encode $encodeopts -o shapes/pending-$now");
+		for my $f (@pending) {
+			open(IN, "./import/src/gpx-parse $f |");
+			while (<IN>) {
+				print OUT;
+			}
+			close(IN);
+		}
+		close(OUT);
+
+		$parsetime = time();
+
+		open(IN, "./datamaps/enumerate -Z6 -z20 shapes/pending-$now |");
+		while (<IN>) {
+			my ($file, $z, $x, $y);
+			($file, $z, $x, $y) = split(/ /);
+			print "/tmp/tile/$z/$x/$y.png\n";
+			$memd->delete("/tmp/tile/$z/$x/$y.png");
+		}
+		close(IN);
+
+		$cachetime = time();
+
+		merge("shapes/pending-$now", "shapes/current");
+
+		$mergetime = time();
+
+		for my $f (@pending) {
+			my $i = $f;
+			$i =~ s/.*\///;
+			$i =~ s/\.gpx//;
+			my $dir = int($i / 10000);
+
+			mkdir "tracks/current/$dir";
+
+			my $f2 = $f;
+			$f2 =~ s/pending/current\/$dir/;
+
+			rename($f, $f2);
+			system "gzip -9 $f2";
+		}
+
+		$cleantime = time();
+	}
+
+	if ($did) {
+		open(OUT, ">>$ENV{'HOME'}/time-stats");
+		print OUT "$min to $max $now ";
+		printf OUT ("%d rss ", $rsstime - $now);
+		printf OUT ("%d retrieve ", $retrievetime - $rsstime);
+		printf OUT ("%d parse ", $parsetime - $retrievetime);
+		printf OUT ("%d cache ", $cachetime - $parsetime);
+		printf OUT ("%d merge ", $mergetime - $cachetime);
+		printf OUT ("%d clean $$\n", $cleantime - $mergetime);
+		close(OUT);
+	}
+
+	sleep(60);
+}

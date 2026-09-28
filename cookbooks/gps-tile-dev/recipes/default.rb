@@ -50,3 +50,31 @@ template "/srv/gps-tile.openstreetmap.org/html/map.js" do
   mode "644"
   variables :domain => domain
 end
+
+# updater/tile renders with "-f shapes/lines-directional.dm". That dataset
+# exists on the OSM production server but nothing creates it, and without it
+# render fails and every tile is empty. Create an empty one.
+execute "create-lines-directional" do
+  command "./datamaps/encode -z20 -m8 -o shapes/lines-directional.dm < /dev/null"
+  cwd "/srv/gps-tile.openstreetmap.org"
+  user "gpstile"
+  group "gpstile"
+  creates "/srv/gps-tile.openstreetmap.org/shapes/lines-directional.dm/meta"
+end
+
+# Updater that fetches traces from our own openstreetmap-website instance.
+# Kept outside updater/ so the git sync in gps-tile does not touch it.
+template "/srv/gps-tile.openstreetmap.org/update" do
+  source "update.erb"
+  owner "gpstile"
+  group "gpstile"
+  mode "755"
+  variables :site_url => node[:gps_tile_dev][:site_url],
+            :min_trace => node[:gps_tile_dev][:min_trace]
+  notifies :restart, "service[gps-update]"
+end
+
+# Point the gps-update unit defined in gps-tile at our script
+edit_resource(:systemd_service, "gps-update") do
+  exec_start "/srv/gps-tile.openstreetmap.org/update"
+end
